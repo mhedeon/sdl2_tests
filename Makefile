@@ -50,6 +50,9 @@ FRAMEWORKS = -F$(LIB_DIR)/libmgl/frameworks \
 			-framework SDL2_ttf
 #-------------------------------------------------------------------------------
 
+start: all
+	./test
+
 all: lib $(NAME)
 
 $(NAME): $(OBJ_DIR) $(OBJ_LIST) $(HEADERS) $(LIBRARIES)

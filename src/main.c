@@ -9,7 +9,7 @@ void init(t_test *test)
 int main()
 {
 	t_test	*test;
-	char *text;
+	char text[32];
 	char *composition;
 	Sint32 cursor;
 	Sint32 selection_len;
@@ -35,7 +35,8 @@ int main()
 					break;
 				case SDL_TEXTINPUT:
 					/* Add new text onto the end of our text */
-					strcat(text, e.text.text);
+					strncat(text, e.text.text, 32 - strlen(text) - 1);
+					// printf("text: %s\n\n", e.text.text);
 					printf("inpt\n");
 					break;
 				case SDL_TEXTEDITING:
@@ -52,7 +53,7 @@ int main()
 					break;
 			}
 		}
-		printf("text: %s\nlength: %lu\n", text, strlen(text));
+		printf("text: %s\n\n", text);
 		// ttf_render_text(test->win->ren, test->font, &(SDL_Rect) { 50, 50, selection_len, 20 }, text);
 		upd_win(test->win);
 	}
