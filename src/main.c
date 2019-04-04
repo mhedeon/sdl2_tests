@@ -1,157 +1,204 @@
 #include "test.h"
 
-void init(t_test *test)
+void CloseSocket(int index)
 {
-	test->win = create_win("test", 2000, 600);
-	test->font = ttf_open_font("./libraries/libmgl/ttf/OpenSans-Regular.ttf", 30);
+	if(sockets[index] == NULL)
+		error_log("ER: Attempted to delete a NULL socket.");
+
+	if(SDLNet_TCP_DelSocket(socket_set, sockets[index]) == -1)
+		error_log("ER: SDLNet_TCP_DelSocket:");
+
+	memset(&clients[index], 0x00, sizeof(Client));
+	SDLNet_TCP_Close(sockets[index]);
+	sockets[index] = NULL;
 }
 
-void			ttf_render_solid(SDL_Renderer *ren, TTF_Font *font, SDL_Rect *r,
-															char *text)
+int AcceptSocket(int index)
 {
-	SDL_Surface	*sur;
-	SDL_Texture	*msg;
+	if(sockets[index]) {
+		fprintf(stderr, "ER: Overriding socket at index %d.\n", index);
+		CloseSocket(index);
+	}
 
-	sur = TTF_RenderText_Solid(font, text, (SDL_Color) { 255, 255, 255, 0 });
-	if (sur == NULL)
-	{
-		error_log("Text error");
-		return ;
+	sockets[index] = SDLNet_TCP_Accept(server_socket);
+	if(sockets[index] == NULL) return 0;
+
+	clients[index].in_use = 1;
+	if(SDLNet_TCP_AddSocket(socket_set, sockets[index]) == -1) {
+		fprintf(stderr, "ER: SDLNet_TCP_AddSocket: %s\n", SDLNet_GetError());
+		exit(-1);
 	}
-	msg = SDL_CreateTextureFromSurface(ren, sur);
-	if (msg == NULL)
-	{
-		SDL_FreeSurface(sur);
-		error_log("Text error");
-		return ;
-	}
-	SDL_RenderCopy(ren, msg, NULL, r);
-	SDL_FreeSurface(sur);
-	SDL_DestroyTexture(msg);
+
+	return 1;
 }
 
-void			ttf_render_blended(SDL_Renderer *ren, TTF_Font *font, SDL_Rect *r,
-															char *text)
+uint8_t* RecvData(int index, uint16_t* length, uint16_t* flag)
 {
-	SDL_Surface	*sur;
-	SDL_Texture	*msg;
+	uint8_t temp_data[MAX_PACKET];
+	int num_recv = SDLNet_TCP_Recv(sockets[index], temp_data, MAX_PACKET);
 
-	sur = TTF_RenderText_Blended(font, text, (SDL_Color) { 255, 255, 255, 0 });
-	if (sur == NULL)
-	{
-		error_log("Text error");
-		return ;
+	if(num_recv <= 0) {
+		CloseSocket(index);
+		const char* err = SDLNet_GetError();
+		if(strlen(err) == 0) {
+			printf("DB: client disconnected\n");
+		} else {
+			fprintf(stderr, "ER: SDLNet_TCP_Recv: %s\n", err);
+		}
+
+		return NULL;
+	} else {
+		int offset = 0;
+		*flag = *(uint16_t*) &temp_data[offset];
+		offset += sizeof(uint16_t);
+
+		*length = (num_recv-offset);
+
+		uint8_t* data = (uint8_t*) malloc((num_recv-offset)*sizeof(uint8_t));
+		memcpy(data, &temp_data[offset], (num_recv-offset));
+
+		return data;
 	}
-	msg = SDL_CreateTextureFromSurface(ren, sur);
-	if (msg == NULL)
-	{
-		SDL_FreeSurface(sur);
-		error_log("Text error");
-		return ;
-	}
-	SDL_RenderCopy(ren, msg, NULL, r);
-	SDL_FreeSurface(sur);
-	SDL_DestroyTexture(msg);
 }
 
-void			ttf_render_shaded(SDL_Renderer *ren, TTF_Font *font, SDL_Rect *r,
-															char *text)
+void SendData(int index, uint8_t* data, uint16_t length, uint16_t flag)
 {
-	SDL_Surface	*sur;
-	SDL_Texture	*msg;
+	uint8_t temp_data[MAX_PACKET];
 
-	sur = TTF_RenderText_Shaded(font, text, (SDL_Color) { 255, 255, 255, 0 }, (SDL_Color) { 255, 0, 0, 0 });
-	if (sur == NULL)
-	{
-		error_log("Text error");
-		return ;
+	int offset = 0;
+	memcpy(temp_data+offset, &flag, sizeof(uint16_t));
+	offset += sizeof(uint16_t);
+	memcpy(temp_data+offset, data, length);
+	offset += length;
+
+	int num_sent = SDLNet_TCP_Send(sockets[index], temp_data, offset);
+	if(num_sent < offset) {
+		fprintf(stderr, "ER: SDLNet_TCP_Send: %s\n", SDLNet_GetError());
+		CloseSocket(index);
 	}
-	msg = SDL_CreateTextureFromSurface(ren, sur);
-	if (msg == NULL)
-	{
-		SDL_FreeSurface(sur);
-		error_log("Text error");
-		return ;
-	}
-	SDL_RenderCopy(ren, msg, NULL, r);
-	SDL_FreeSurface(sur);
-	SDL_DestroyTexture(msg);
 }
 
 int main()
 {
-	t_test	*test;
-	// char text[32];
-	char *text = (char*)malloc(sizeof(char));
-							text[0] = '\0';
-	int len = 1;
-	char *composition;
-	Sint32 cursor;
-	Sint32 selection_len;
-	SDL_bool done = SDL_FALSE;
+	t_window *win = create_win("test TCP", 500, 500);
 
-	if ((test = (t_test*)malloc(sizeof(t_test))) == NULL)
-		return (error_log("malloc err"));
-	init(test);
-	
-	SDL_StartTextInput();
-	while (!done)
+	if(SDL_Init(SDL_INIT_TIMER|SDL_INIT_EVENTS) != 0)
+		return (error_log("ER: SDL_Init:"));
+	if(SDLNet_Init() == -1)
+		return (error_log("ER: SDLNet_Init:"));
+
+	IPaddress ip;
+	if(SDLNet_ResolveHost(&ip, NULL, 8069) == -1)
+		return (error_log("ER: SDLNet_ResolveHost:"));
+
+	server_socket = SDLNet_TCP_Open(&ip);
+	if(server_socket == NULL)
+		return (error_log("ER: SDLNet_TCP_Open:"));
+
+	socket_set = SDLNet_AllocSocketSet(MAX_SOCKETS + 1);
+	if (socket_set == NULL)
+		return (error_log ("ER: SDLNet_AllocSocketSet:"));
+
+	if(SDLNet_TCP_AddSocket(socket_set, server_socket) == -1)
+		return (error_log ("ER: SDLNet_TCP_AddSocket:"));
+
+	int running = 1;
+	while(running)
 	{
-		SDL_Event e;
-		if (SDL_PollEvent(&e))
+		int num_rdy = SDLNet_CheckSockets(socket_set, 1000);
+
+		if(num_rdy <= 0)
 		{
-			if (KEY == SDLK_BACKSPACE)
-				text[strlen(text) - 1] = '\0';
-			if (KEY == SDLK_ESCAPE)
-				done = SDL_TRUE;
-			if (KEY == SDLK_RETURN)
+			int ind;
+			for(ind=0; ind<MAX_SOCKETS; ++ind)
 			{
-				text = realloc(text, --len);
-				strncat(text, "\n", len - strlen(text) - 1);
-			}
-			switch (e.type)
-			{
-				case SDL_QUIT:
-					/* Quit */
-					done = SDL_TRUE;
-					break;
-				case SDL_TEXTINPUT:
-					/* Add new text onto the end of our text */
-					text = realloc(text, ++len);
-					strncat(text, e.text.text, len - strlen(text) - 1);
-					// strncat(text, e.text.text, 32 - strlen(text) - 1);
-					printf("inpt\n");
-					break;
-				case SDL_TEXTEDITING:
-					/*
-					Update the composition text.
-					Update the cursor position.
-					Update the selection length (if any).
-					*/
-					printf("edt\n");
-					composition = e.edit.text;
-					cursor = e.edit.start;
-					selection_len = e.edit.length;
-					
-					break;
+				if (!clients[ind].in_use) continue ;
+				clients[ind].amt_wood += 4;
 			}
 		}
-		// printf("text: %s\n\n", text);
+		else
+		{
+			if(SDLNet_SocketReady(server_socket))
+			{
+				int got_socket = AcceptSocket(next_ind);
+				if(!got_socket) {
+					num_rdy--;
+					continue;
+				}
 
-		SDL_UpdateTexture(test->win->tex, NULL, test->win->buff,
-			test->win->w * sizeof(Uint32));
-		SDL_RenderClear(test->win->ren);
-		SDL_RenderCopy(test->win->ren, test->win->tex, NULL, NULL);
+				// NOTE: get a new index
+				int chk_count;
+				for(chk_count=0; chk_count<MAX_SOCKETS; ++chk_count) {
+					if(sockets[(next_ind+chk_count)%MAX_SOCKETS] == NULL) break;
+				}
 
-		int w, h;
-		TTF_SizeText(test->font, text, &w, &h);
-		ttf_render_solid(test->win->ren, test->font, &(SDL_Rect) { 50, 50, w, h }, text);
-		ttf_render_blended(test->win->ren, test->font, &(SDL_Rect) { 50, 150, w, h }, text);
-		ttf_render_shaded(test->win->ren, test->font, &(SDL_Rect) { 50, 250, w, h }, text);
+				next_ind = (next_ind+chk_count)%MAX_SOCKETS;
+				printf("DB: new connection (next_ind = %d)\n", next_ind);
 
-		SDL_RenderPresent(test->win->ren);
+				num_rdy--;
+			}
+		}
+
+		int ind;
+		for(ind=0; (ind<MAX_SOCKETS) && num_rdy; ++ind)
+		{
+			if(sockets[ind] == NULL) continue;
+			if(!SDLNet_SocketReady(sockets[ind])) continue;
+
+			uint8_t* data;
+			uint16_t flag;
+			uint16_t length;
+						
+			data = RecvData(ind, &length, &flag);
+			if(data == NULL)
+			{
+				num_rdy--;
+				continue;
+			}
+
+			switch(flag)
+			{
+				case FLAG_WOOD_UPDATE:
+				{
+					uint16_t offset = 0;
+					uint8_t send_data[MAX_PACKET];
+
+					memcpy(send_data+offset, &clients[ind].amt_wood, sizeof(uint8_t));
+					offset += sizeof(uint8_t);
+					SendData(ind, send_data, offset, FLAG_WOOD_UPDATE);
+					break;
+				}
+				case FLAG_QUIT:
+				{
+					running = 0;
+					printf("DB: shutdown by client id: %d\n", ind);
+					break;
+				}
+			}
+			free(data);
+			num_rdy--;
+		}
+		SDL_Event e;
+		while (SDL_PollEvent(&e))
+			if ((KEY == SDLK_ESCAPE) || e.type == SDL_QUIT)
+				running = 0;
+
 	}
 
+	if(SDLNet_TCP_DelSocket(socket_set, server_socket) == -1)
+		return (error_log ("ER: SDLNet_TCP_DelSocket:"));
+	SDLNet_TCP_Close(server_socket);
+
+	int i;
+	for(i=0; i<MAX_SOCKETS; ++i)
+	{
+		if(sockets[i] == NULL) continue;
+		CloseSocket(i);
+	}
+
+	SDLNet_FreeSocketSet(socket_set);
+	SDLNet_Quit();
+	SDL_Quit();
 	// system("leaks test");
 	return (0);
 }
