@@ -39,6 +39,7 @@ INCLUDES = -I $(H_DIR) \
 			-I$(LIB_DIR)/libmgl/frameworks/SDL2_image.framework/Headers/ \
 			-I$(LIB_DIR)/libmgl/frameworks/SDL2_mixer.framework/Headers/ \
 			-I$(LIB_DIR)/libmgl/frameworks/SDL2_ttf.framework/Headers/ \
+			-I$(LIB_DIR)/libmgl/frameworks/SDL2_net.framework/Headers/ \
 			-F$(LIB_DIR)/libmgl/frameworks \
 			-I$(LIB_DIR)/libmgl/headers/
 
@@ -47,7 +48,8 @@ FRAMEWORKS = -F$(LIB_DIR)/libmgl/frameworks \
 			-framework SDL2 \
 			-framework SDL2_image \
 			-framework SDL2_mixer \
-			-framework SDL2_ttf
+			-framework SDL2_ttf \
+			-framework SDL2_net
 #-------------------------------------------------------------------------------
 
 start: all
